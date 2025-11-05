@@ -5,7 +5,7 @@ def get_track_and_type(path=None):
     out = subprocess.run(['mkvmerge', '-J', path], encoding='utf-8', stdout=subprocess.PIPE)
     json_output = json.loads(out.stdout)
     for track in json_output['tracks']:
-        if track['type'] == 'subtitles':
+        if track['type'] == 'subtitles' and 'language' in track['properties'] and 'orced' not in track['properties'].get('track_name', ''):
             if track['properties']['language'] == 'eng':
                 if track['properties']['codec_id'] == 'S_TEXT/ASS':
                     return track['id'], True
