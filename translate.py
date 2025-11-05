@@ -1,3 +1,4 @@
+import subprocess
 import os
 from random import randint, random
 import time
@@ -10,6 +11,18 @@ from selenium.webdriver.support import expected_conditions as EC
 
 
 def checkDriverFirst():
+    out = subprocess.run(['which', 'chromedriver'], encoding='utf-8', stdout=subprocess.PIPE)
+    if out.returncode != 0:
+        raise Exception(f"Failed lookup which chromedriver\n{out.stdout=}")
+    full_out = out.stdout.strip()
+    out = subprocess.run(['readlink', full_out], encoding='utf-8', stdout=subprocess.PIPE)
+    if out.returncode != 0:
+        raise Exception(f"Failed readlink chromedriver\n{out=}\n{out.stdout=}")
+    chromedriver_path = full_out if out.stdout.strip() == '' else out.stdout.strip()
+    out = subprocess.run(['xattr', '-d', 'com.apple.quarantine', chromedriver_path], encoding='utf-8', stdout=subprocess.PIPE)
+    if out.returncode != 0:
+        print(f"Maybe failed to change chromedriver permissions\n{out.stdout=}\n{chromedriver_path=}")
+
     path = os.path.realpath("/usr/local/bin/chromedriver")
     with open(path, "rb") as file:
         content = file.read()
@@ -54,7 +67,6 @@ def setup_browser(save_path=None):
     #     browser.switch_to.new_window('tab')
     #     browser.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
     width, height = browser.get_window_size().values()
-
     return browser, width, height
 
 
