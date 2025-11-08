@@ -1,15 +1,23 @@
 import html
 import subprocess, os, json
 
-def get_track_and_type(path=None):
+def get_track_and_type(path=None, from_lang='en', to_lang='th'):
     out = subprocess.run(['mkvmerge', '-J', path], encoding='utf-8', stdout=subprocess.PIPE)
     json_output = json.loads(out.stdout)
+    # maybe the target language already exists
+    for track in json_output['tracks']:
+        if track['type'] == 'subtitles' and 'language' in track['properties']:
+            if track['properties']['language_ietf'] == to_lang:
+                if track['properties']['codec_id'] == 'S_TEXT/ASS':
+                    return track['id'], True, False
+                return track['id'], False, False
+    # otherwise extract the src language for translation
     for track in json_output['tracks']:
         if track['type'] == 'subtitles' and 'language' in track['properties'] and 'orced' not in track['properties'].get('track_name', ''):
-            if track['properties']['language'] == 'eng':
+            if track['properties']['language_ietf'] == from_lang:
                 if track['properties']['codec_id'] == 'S_TEXT/ASS':
-                    return track['id'], True
-                return track['id'], False
+                    return track['id'], True, True
+                return track['id'], False, True
 
 
 def extract_and_convert_ass_to_srt(path=None, track_id=None, convert=False):
