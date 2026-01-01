@@ -5,7 +5,7 @@ import glob
 
 
 if __name__ == '__main__':
-    path = 'some_unix_path'
+    path = '/Volumes/datadump/____tmpRepo/tmp'
     browser, width, height = None, None, None
     to_lang, from_lang = 'th', 'en'
     files_list = glob.glob(f'{path}/*.mkv')
@@ -14,13 +14,16 @@ if __name__ == '__main__':
         if not file.endswith('.mkv'):
             continue
         print(file)
-        try:
-            id, convert, translation_needed = get_track_and_type(path=file, from_lang=from_lang, to_lang=to_lang)
-        except Exception as e:
-            print(f"Error getting track and type")
-            os.rename(file, f"{file}-subtitles_error")
-            continue
-        extract_and_convert_ass_to_srt(path=file, track_id=id, convert=convert)
+        if not os.path.exists(f"{file[:-4]}.srt"):
+            try:
+                id, convert, translation_needed = get_track_and_type(path=file, from_lang=from_lang, to_lang=to_lang)
+            except Exception as e:
+                print(f"Error getting track and type")
+                os.rename(file, f"{file}-subtitles_error")
+                continue
+            extract_and_convert_ass_to_srt(path=file, track_id=id, convert=convert)
+        else:
+            translation_needed = True
         if translation_needed:
             convert_to_docx(path=file)
             if browser is not None:
