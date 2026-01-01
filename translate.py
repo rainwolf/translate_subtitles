@@ -11,10 +11,10 @@ from selenium.webdriver.support import expected_conditions as EC
 
 
 def checkDriverFirst():
-    out = subprocess.run(['which', 'chromedriver'], encoding='utf-8', stdout=subprocess.PIPE)
-    if out.returncode != 0:
-        raise Exception(f"Failed lookup which chromedriver\n{out.stdout=}")
-    full_out = out.stdout.strip()
+    out_base = subprocess.run(['which', 'chromedriver'], encoding='utf-8', stdout=subprocess.PIPE)
+    if out_base.returncode != 0:
+        raise Exception(f"Failed lookup which chromedriver\n{out_base.stdout=}")
+    full_out = out_base.stdout.strip()
     out = subprocess.run(['readlink', full_out], encoding='utf-8', stdout=subprocess.PIPE)
     if out.returncode != 0:
         raise Exception(f"Failed readlink chromedriver\n{out=}\n{out.stdout=}")
@@ -23,7 +23,7 @@ def checkDriverFirst():
     if out.returncode != 0:
         print(f"Maybe failed to change chromedriver permissions\n{out.stdout=}\n{chromedriver_path=}")
 
-    path = os.path.realpath("/usr/local/bin/chromedriver")
+    path = os.path.realpath(out_base.stdout.strip())
     with open(path, "rb") as file:
         content = file.read()
         if b"cdc_" in content:

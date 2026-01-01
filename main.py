@@ -5,7 +5,7 @@ import glob
 
 
 if __name__ == '__main__':
-    path = '/Volumes/datadump/____tmpRepo/tmp'
+    path = 'some_unix_path'
     browser, width, height = None, None, None
     to_lang, from_lang = 'th', 'en'
     files_list = glob.glob(f'{path}/*.mkv')
