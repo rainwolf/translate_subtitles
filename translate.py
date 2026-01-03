@@ -1,6 +1,6 @@
 import subprocess
 import os
-from random import randint, random
+from random import randint
 import time
 
 from selenium.webdriver import Chrome
@@ -11,17 +11,27 @@ from selenium.webdriver.support import expected_conditions as EC
 
 
 def checkDriverFirst():
-    out_base = subprocess.run(['which', 'chromedriver'], encoding='utf-8', stdout=subprocess.PIPE)
+    out_base = subprocess.run(
+        ["which", "chromedriver"], encoding="utf-8", stdout=subprocess.PIPE
+    )
     if out_base.returncode != 0:
         raise Exception(f"Failed lookup which chromedriver\n{out_base.stdout=}")
     full_out = out_base.stdout.strip()
-    out = subprocess.run(['readlink', full_out], encoding='utf-8', stdout=subprocess.PIPE)
+    out = subprocess.run(
+        ["readlink", full_out], encoding="utf-8", stdout=subprocess.PIPE
+    )
     if out.returncode != 0:
         raise Exception(f"Failed readlink chromedriver\n{out=}\n{out.stdout=}")
-    chromedriver_path = full_out if out.stdout.strip() == '' else out.stdout.strip()
-    out = subprocess.run(['xattr', '-d', 'com.apple.quarantine', chromedriver_path], encoding='utf-8', stdout=subprocess.PIPE)
+    chromedriver_path = full_out if out.stdout.strip() == "" else out.stdout.strip()
+    out = subprocess.run(
+        ["xattr", "-d", "com.apple.quarantine", chromedriver_path],
+        encoding="utf-8",
+        stdout=subprocess.PIPE,
+    )
     if out.returncode != 0:
-        print(f"Maybe failed to change chromedriver permissions\n{out.stdout=}\n{chromedriver_path=}")
+        print(
+            f"Maybe failed to change chromedriver permissions\n{out.stdout=}\n{chromedriver_path=}"
+        )
 
     path = os.path.realpath(out_base.stdout.strip())
     with open(path, "rb") as file:
@@ -47,22 +57,25 @@ def setup_browser(save_path=None):
     opts = Options()
     opts.add_argument("--start-maximized")
     # opts.add_argument("--headless")
-    opts.binary_location = '/Applications/Internet/Google Chrome.app/Contents/MacOS/Google Chrome'
+    opts.binary_location = (
+        "/Applications/Internet/Google Chrome.app/Contents/MacOS/Google Chrome"
+    )
     opts.add_argument("user-data-dir=chromeUserData")
     opts.add_argument("--disable-dev-shm-usage")  # overcome limited resource problems
     opts.add_argument("--no-sandbox")  # Bypass OS security model
-    opts.add_argument('--disable-web-security')
-    opts.add_argument('--allow-running-insecure-content')
+    opts.add_argument("--disable-web-security")
+    opts.add_argument("--allow-running-insecure-content")
     opts.add_argument("--disable-blink-features=AutomationControlled")
-    opts.add_experimental_option("excludeSwitches", ["enable-automation"]) 
-    opts.add_experimental_option("useAutomationExtension", False) 
+    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+    opts.add_experimental_option("useAutomationExtension", False)
 
-
-    prefs = {"download.default_directory" : save_path}
+    prefs = {"download.default_directory": save_path}
     opts.add_experimental_option("prefs", prefs)
     browser = Chrome(options=opts)
     browser.implicitly_wait(100)
-    browser.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    browser.execute_script(
+        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+    )
     # if random() > 0.5:
     #     browser.switch_to.new_window('tab')
     #     browser.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
@@ -70,16 +83,22 @@ def setup_browser(save_path=None):
     return browser, width, height
 
 
-def translate(path=None, from_lang='en', to_lang='th', browser=None):
-    save_path = path.replace(path.split('/')[-1], '')[:-1]
+def translate(path=None, from_lang="en", to_lang="th", browser=None):
+    save_path = path.replace(path.split("/")[-1], "")[:-1]
     width, height = None, None
     if browser is None:
         browser, width, height = setup_browser(save_path=save_path)
 
-    browser.get(f'https://translate.google.com/?sl={from_lang}&tl={to_lang}&op=docs')
-    drag_drop = browser.find_element('xpath', "/html/body/c-wiz/div/div[2]/c-wiz/div[3]/c-wiz/div[2]/c-wiz/div/div[1]/div/div/div[1]/div[2]/div[2]/div/input")
+    browser.get(f"https://translate.google.com/?sl={from_lang}&tl={to_lang}&op=docs")
+    drag_drop = browser.find_element(
+        "xpath",
+        "/html/body/c-wiz/div/div[2]/c-wiz/div[3]/c-wiz/div[2]/c-wiz/div/div[1]/div/div/div[1]/div[2]/div[2]/div/input",
+    )
     drag_drop.send_keys(path)
-    translate_button = browser.find_element('xpath', "/html/body/c-wiz/div/div[2]/c-wiz/div[3]/c-wiz/div[2]/c-wiz/div/div[1]/div/div[2]/div/div/button")
+    translate_button = browser.find_element(
+        "xpath",
+        "/html/body/c-wiz/div/div[2]/c-wiz/div[3]/c-wiz/div[2]/c-wiz/div/div[1]/div/div[2]/div/div/button",
+    )
     translate_button.click()
     os.remove(path)
 
@@ -88,7 +107,13 @@ def translate(path=None, from_lang='en', to_lang='th', browser=None):
     while failed:
         try:
             element = WebDriverWait(browser, 15).until(
-            EC.presence_of_element_located((By.XPATH, "/html/body/c-wiz/div/div[2]/c-wiz/div[3]/c-wiz/div[2]/c-wiz/div/div[1]/div/div[2]/div/button/span[2]")))
+                EC.presence_of_element_located(
+                    (
+                        By.XPATH,
+                        "/html/body/c-wiz/div/div[2]/c-wiz/div[3]/c-wiz/div[2]/c-wiz/div/div[1]/div/div[2]/div/button/span[2]",
+                    )
+                )
+            )
             sleep_time = randint(1, 4)
             element.click()
             while not os.path.exists(path):
