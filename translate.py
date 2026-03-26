@@ -60,7 +60,7 @@ def setup_browser(save_path=None):
     opts.binary_location = (
         "/Applications/Internet/Google Chrome.app/Contents/MacOS/Google Chrome"
     )
-    opts.add_argument("user-data-dir=chromeUserData")
+    opts.add_argument("user-data-dir=../chromeUserData")
     opts.add_argument("--disable-dev-shm-usage")  # overcome limited resource problems
     opts.add_argument("--no-sandbox")  # Bypass OS security model
     opts.add_argument("--disable-web-security")
