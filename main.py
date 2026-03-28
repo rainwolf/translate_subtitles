@@ -10,10 +10,11 @@ from utils import (
 import glob
 
 
-if __name__ == '__main__':
-    path = 'some_unix_path'
+if __name__ == "__main__":
+    path = os.environ["TRANSLATE_PATH"]
     browser, width, height = None, None, None
-    to_lang, from_lang = "nl", "en"
+    to_lang = os.environ.get("TRANSLATE_TO_LANG", "th")
+    from_lang = os.environ.get("TRANSLATE_FROM_LANG", "en")
     files_list = glob.glob(f"{path}/*.mkv")
     files_list = [
         f

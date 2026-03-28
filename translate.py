@@ -1,10 +1,12 @@
 import subprocess
+import subprocess
 import os
 from random import randint
 import time
 
-from selenium.webdriver import Chrome
-from selenium.webdriver.chrome.options import Options
+import undetected_chromedriver as uc
+# from selenium.webdriver import Chrome
+# from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -43,6 +45,8 @@ def checkDriverFirst():
             print("driver cdc_ patched")
         else:
             print("driver is already cdc_ patched")
+    subprocess.run(["codesign", "--remove-signature", path])
+    subprocess.run(["codesign", "--force", "--deep", "-s", "-", path])
 
 
 def change_browser_window_size(browser=None, max_width=None, max_height=None):
@@ -53,32 +57,33 @@ def change_browser_window_size(browser=None, max_width=None, max_height=None):
 
 
 def setup_browser(save_path=None):
-    checkDriverFirst()
-    opts = Options()
+    # checkDriverFirst()
+    opts = uc.ChromeOptions()
     opts.add_argument("--start-maximized")
     # opts.add_argument("--headless")
     opts.binary_location = (
         "/Applications/Internet/Google Chrome.app/Contents/MacOS/Google Chrome"
     )
-    opts.add_argument("user-data-dir=../chromeUserData")
+    opts.add_argument("--user-data-dir=../chromeUserData")
     opts.add_argument("--disable-dev-shm-usage")  # overcome limited resource problems
     opts.add_argument("--no-sandbox")  # Bypass OS security model
     opts.add_argument("--disable-web-security")
     opts.add_argument("--allow-running-insecure-content")
-    opts.add_argument("--disable-blink-features=AutomationControlled")
-    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
-    opts.add_experimental_option("useAutomationExtension", False)
+    # opts.add_argument("--disable-blink-features=AutomationControlled")
+    # opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+    # opts.add_experimental_option("useAutomationExtension", False)
 
     prefs = {"download.default_directory": save_path}
     opts.add_experimental_option("prefs", prefs)
-    browser = Chrome(options=opts)
+    chrome_version = subprocess.run(
+        [opts.binary_location, "--version"],
+        encoding="utf-8", stdout=subprocess.PIPE
+    ).stdout.strip().split()[-1].split(".")[0]
+    browser = uc.Chrome(options=opts, version_main=int(chrome_version))
     browser.implicitly_wait(100)
-    browser.execute_script(
-        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-    )
-    # if random() > 0.5:
-    #     browser.switch_to.new_window('tab')
-    #     browser.execute_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
+    # browser.execute_script(
+    #     "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+    # )
     width, height = browser.get_window_size().values()
     return browser, width, height
 
