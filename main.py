@@ -8,7 +8,9 @@ from utils import (
     strip_and_add_subtitle,
 )
 import glob
+from dotenv import load_dotenv
 
+load_dotenv()
 
 if __name__ == "__main__":
     path = os.environ["TRANSLATE_PATH"]

@@ -1,10 +1,10 @@
 import subprocess
-import subprocess
 import os
 from random import randint
 import time
 
 import undetected_chromedriver as uc
+
 # from selenium.webdriver import Chrome
 # from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
@@ -75,10 +75,16 @@ def setup_browser(save_path=None):
 
     prefs = {"download.default_directory": save_path}
     opts.add_experimental_option("prefs", prefs)
-    chrome_version = subprocess.run(
-        [opts.binary_location, "--version"],
-        encoding="utf-8", stdout=subprocess.PIPE
-    ).stdout.strip().split()[-1].split(".")[0]
+    chrome_version = (
+        subprocess.run(
+            [opts.binary_location, "--version"],
+            encoding="utf-8",
+            stdout=subprocess.PIPE,
+        )
+        .stdout.strip()
+        .split()[-1]
+        .split(".")[0]
+    )
     browser = uc.Chrome(options=opts, version_main=int(chrome_version))
     browser.implicitly_wait(100)
     # browser.execute_script(
