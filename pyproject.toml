@@ -9,4 +9,5 @@ dependencies = [
     "selenium>=4.36.0",
     "undetected-chromedriver>=3.5.5",
     "setuptools",
+    "dotenv>=0.9.9",
 ]
