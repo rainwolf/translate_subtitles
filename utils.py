@@ -1,5 +1,52 @@
 import html
+import re
 import subprocess, os, json
+
+TIMESTAMP_RE = re.compile(
+    r"^\s*(\d{2}:\d{2}:\d{2},\d{3})\s*-+\s*>\s*(\d{2}:\d{2}:\d{2},\d{3})\s*(.*)$"
+)
+
+
+def rebuild_srt(text):
+    """Re-emit a well-formed SRT from the pandoc/Google round-trip.
+
+    The round-trip damages cues three ways: a doubled space before `-->`,
+    dialogue cues (`- line`) split off from their header by a spurious blank
+    line, and short cues whose text is glued onto the timestamp line. Anchor on
+    the timestamps -- those survive intact -- and reattach everything between
+    them as that cue's text.
+    """
+    lines = text.splitlines()
+    cues = []
+    i = 0
+    while i < len(lines):
+        match = TIMESTAMP_RE.match(lines[i])
+        if match is None:
+            i += 1
+            continue
+        start, end, trailing = match.groups()
+        body = [trailing.strip()] if trailing.strip() else []
+        i += 1
+        while i < len(lines):
+            line = lines[i].strip()
+            if TIMESTAMP_RE.match(lines[i]):
+                break
+            # a bare number right before a timestamp is the next cue's index
+            if (
+                line.isdigit()
+                and i + 1 < len(lines)
+                and TIMESTAMP_RE.match(lines[i + 1])
+            ):
+                break
+            if line:
+                body.append(line)
+            i += 1
+        cues.append((start, end, body))
+    blocks = [
+        f"{n}\n{start} --> {end}\n" + "\n".join(body or [""])
+        for n, (start, end, body) in enumerate(cues, 1)
+    ]
+    return "\n\n".join(blocks) + "\n"
 
 
 def get_track_and_type(path=None, from_lang="en", to_lang="th"):
@@ -86,6 +133,7 @@ def convert_html_encodings(path=None):
         text = f.read()
     unescaped_text = html.unescape(text)
     unescaped_text = unescaped_text.replace("-- >", "-->")
+    unescaped_text = rebuild_srt(unescaped_text)
     with open(srt_file, "w", encoding="utf-8") as f:
         f.write(unescaped_text)
 

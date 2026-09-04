@@ -1,4 +1,5 @@
 import os
+import shutil
 from translate import change_browser_window_size, translate
 from utils import (
     convert_to_docx,
@@ -17,17 +18,33 @@ if __name__ == "__main__":
     browser, width, height = None, None, None
     to_lang = os.environ.get("TRANSLATE_TO_LANG", "th")
     from_lang = os.environ.get("TRANSLATE_FROM_LANG", "en")
-    files_list = glob.glob(f"{path}/*.mkv")
+    # mkv can be remuxed; mp4 is sidecar-srt only
+    files_list = glob.glob(f"{path}/*.mkv") + glob.glob(f"{path}/*.mp4")
     files_list = [
         f
         for f in files_list
         if len(list(filter(lambda x: f[:-7] in x, files_list))) == 1
     ]
     for file in files_list:
-        if not file.endswith(".mkv"):
+        srt_file = f"{file[:-4]}.srt"
+        backup_srt = f"{srt_file}.orig"
+        translated_srt = f"{file[:-4]}.{to_lang}.srt"
+        # recover the source subtitle from an interrupted run
+        if os.path.exists(backup_srt) and not os.path.exists(srt_file):
+            os.replace(backup_srt, srt_file)
+        srt_only = False
+        if not file.endswith((".mkv", ".mp4")):
+            print("Skipping unsupported file")
             continue
+        elif os.path.exists(srt_file):
+            if os.path.exists(translated_srt):
+                print(f"Already translated, skipping:\n  {translated_srt}")
+                continue
+            srt_only = True
+        # else:
+        #     continue
         print(file)
-        if not os.path.exists(f"{file[:-4]}.srt"):
+        if not os.path.exists(srt_file):
             try:
                 id, convert, translation_needed = get_track_and_type(
                     path=file, from_lang=from_lang, to_lang=to_lang
@@ -40,6 +57,8 @@ if __name__ == "__main__":
         else:
             translation_needed = True
         if translation_needed:
+            if srt_only:
+                shutil.copy2(srt_file, backup_srt)
             convert_to_docx(path=file)
             if browser is not None:
                 change_browser_window_size(
@@ -61,6 +80,13 @@ if __name__ == "__main__":
             # from time import sleep
             # sleep(20)
             convert_to_srt(path=file)
+            if srt_only:
+                # keep the source subtitle, publish the translation as a sidecar
+                os.replace(srt_file, translated_srt)
+                os.replace(backup_srt, srt_file)
+        if srt_only:
+            print(f"  -> {translated_srt}")
+            continue
         strip_and_add_subtitle(path=file, language=to_lang)
     if browser is not None:
         browser.quit()
