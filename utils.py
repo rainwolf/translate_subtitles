@@ -54,6 +54,7 @@ def get_track_and_type(path=None, from_lang="en", to_lang="th"):
         ["mkvmerge", "-J", path], encoding="utf-8", stdout=subprocess.PIPE
     )
     json_output = json.loads(out.stdout)
+    # print(json.dumps(json_output, indent=3))
     # maybe the target language already exists
     for track in json_output["tracks"]:
         if track["type"] == "subtitles":
@@ -66,6 +67,19 @@ def get_track_and_type(path=None, from_lang="en", to_lang="th"):
                 if track["properties"]["codec_id"] == "S_TEXT/ASS":
                     return track["id"], True, False
                 return track["id"], False, False
+    else:
+        # in case there's only 1 track but badly labeled
+        if (
+            len(list(filter(lambda t: t["type"] == "subtitles", json_output["tracks"])))
+            == 1
+        ):
+            track = list(
+                filter(lambda t: t["type"] == "subtitles", json_output["tracks"])
+            )[0]
+            if track["properties"]["codec_id"] == "S_TEXT/ASS":
+                return track["id"], True, True
+            return track["id"], False, True
+
     # otherwise extract the src language for translation
     for track in json_output["tracks"]:
         if track["type"] == "subtitles" and "orced" not in track["properties"].get(
@@ -80,6 +94,18 @@ def get_track_and_type(path=None, from_lang="en", to_lang="th"):
                 if track["properties"]["codec_id"] == "S_TEXT/ASS":
                     return track["id"], True, True
                 return track["id"], False, True
+    else:
+        # in case there's only 1 track but badly labeled
+        if (
+            len(list(filter(lambda t: t["type"] == "subtitles", json_output["tracks"])))
+            == 1
+        ):
+            track = list(
+                filter(lambda t: t["type"] == "subtitles", json_output["tracks"])
+            )[0]
+            if track["properties"]["codec_id"] == "S_TEXT/ASS":
+                return track["id"], True, True
+            return track["id"], False, True
 
 
 def extract_and_convert_ass_to_srt(path=None, track_id=None, convert=False):
