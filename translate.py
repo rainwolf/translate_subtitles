@@ -1,9 +1,59 @@
+import platform
 import subprocess
 import os
 from random import randint
 import time
 
 import undetected_chromedriver as uc
+from undetected_chromedriver.patcher import Patcher
+
+
+def _set_platform_name(self):
+    """Replacement for Patcher._set_platform_name.
+
+    undetected-chromedriver 3.5.5 hardcodes "mac-x64" on darwin, so on Apple
+    Silicon it downloads an x86_64 chromedriver and Popen fails with
+    OSError [Errno 86] Bad CPU type in executable.
+    """
+    if self.platform.endswith("win32"):
+        self.platform_name = "win32"
+        self.exe_name %= ".exe"
+    if self.platform.endswith(("linux", "linux2")):
+        self.platform_name = "linux64"
+        self.exe_name %= ""
+    if self.platform.endswith("darwin"):
+        if self.is_old_chromedriver:
+            self.platform_name = "mac64"
+        elif platform.machine() == "arm64":
+            self.platform_name = "mac-arm64"
+        else:
+            self.platform_name = "mac-x64"
+        self.exe_name %= ""
+
+
+Patcher._set_platform_name = _set_platform_name
+
+_orig_patch = Patcher.patch
+
+
+def _patch_and_resign(self):
+    """Re-sign the patched driver ad-hoc.
+
+    Patcher.patch_exe rewrites bytes in the binary, which invalidates its
+    code signature. On Apple Silicon the kernel SIGKILLs unsigned binaries,
+    so selenium sees "Service ... unexpectedly exited. Status code was: -9".
+    """
+    result = _orig_patch(self)
+    if platform.system() == "Darwin":
+        subprocess.run(
+            ["codesign", "--force", "--sign", "-", self.executable_path],
+            check=True,
+            capture_output=True,
+        )
+    return result
+
+
+Patcher.patch = _patch_and_resign
 
 # from selenium.webdriver import Chrome
 # from selenium.webdriver.chrome.options import Options
