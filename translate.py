@@ -1,6 +1,7 @@
 import platform
 import subprocess
 import os
+import shutil
 from random import randint
 import time
 
@@ -150,18 +151,24 @@ def translate(path=None, from_lang="en", to_lang="th", browser=None):
     if browser is None:
         browser, width, height = setup_browser(save_path=save_path)
 
+    # chrome truncates long download names, so upload under a short one
+    upload_path = os.path.join(save_path, "translate_upload.docx")
+    if os.path.exists(upload_path):
+        os.remove(upload_path)
+    shutil.copyfile(path, upload_path)
+
     browser.get(f"https://translate.google.com/?sl={from_lang}&tl={to_lang}&op=docs")
     drag_drop = browser.find_element(
         "xpath",
         "/html/body/c-wiz/div/div[2]/c-wiz/div[3]/c-wiz/div[2]/c-wiz/div/div[1]/div/div/div[1]/div[2]/div[2]/div/input",
     )
-    drag_drop.send_keys(path)
+    drag_drop.send_keys(upload_path)
     translate_button = browser.find_element(
         "xpath",
         "/html/body/c-wiz/div/div[2]/c-wiz/div[3]/c-wiz/div[2]/c-wiz/div/div[1]/div/div[2]/div/div/button",
     )
     translate_button.click()
-    os.remove(path)
+    os.remove(upload_path)
 
     failed = True
 
@@ -177,8 +184,9 @@ def translate(path=None, from_lang="en", to_lang="th", browser=None):
             )
             sleep_time = randint(1, 4)
             element.click()
-            while not os.path.exists(path):
+            while not os.path.exists(upload_path):
                 time.sleep(1)
+            os.replace(upload_path, path)
             failed = False
         except Exception as e:
             sleep_time = randint(2, 7)
