@@ -2,6 +2,7 @@ import argparse
 import os
 import shutil
 import tempfile
+import openrouter_translate
 from translate import change_browser_window_size, translate
 from utils import (
     convert_to_docx,
@@ -27,7 +28,23 @@ if __name__ == "__main__":
         action="store_true",
         help="merge the original and translated subtitles so both show on screen",
     )
+    parser.add_argument(
+        "--openrouter",
+        nargs="?",
+        const=openrouter_translate.DEFAULT_MODEL,
+        default=None,
+        metavar="MODEL",
+        help="translate with an OpenRouter model instead of Google Translate"
+        " (default %(const)s); the subtitle is named th-or-<vendor>",
+    )
     args = parser.parse_args()
+    name, key = None, None
+    if args.openrouter:
+        name = openrouter_translate.subtitle_name(args.openrouter)
+        try:
+            key = openrouter_translate.api_key()
+        except openrouter_translate.OpenRouterError as e:
+            parser.exit(1, f"{e}\n")
     path = os.environ["TRANSLATE_PATH"]
     browser, width, height = None, None, None
     to_lang = os.environ.get("TRANSLATE_TO_LANG", "th")
@@ -42,11 +59,13 @@ if __name__ == "__main__":
     for file in files_list:
         srt_file = f"{file[:-4]}.srt"
         backup_srt = f"{srt_file}.orig"
-        translated_srt = f"{file[:-4]}.{to_lang}.srt"
+        translated_srt = f"{file[:-4]}.{name or to_lang}.srt"
         # recover the source subtitle from an interrupted run; the .srt left
         # behind may already be cleaned or translated
         if os.path.exists(f"{backup_srt}.tmp"):
             os.remove(f"{backup_srt}.tmp")
+        if name and os.path.exists(f"{translated_srt}.part"):
+            os.remove(f"{translated_srt}.part")
         if os.path.exists(backup_srt):
             os.replace(backup_srt, srt_file)
         srt_only = False
@@ -119,7 +138,27 @@ if __name__ == "__main__":
                 print(f"  merged embedded {from_lang} + {to_lang} tracks")
             else:
                 print(f"  no embedded {from_lang} cues, keeping {to_lang} only")
-        if translation_needed:
+        if translation_needed and args.openrouter:
+            try:
+                translated = openrouter_translate.translate_srt(
+                    original_srt, from_lang, to_lang, args.openrouter, key
+                )
+                if args.dual:
+                    translated = merge_srt_by_overlap(original_srt, translated)
+                if srt_only:
+                    with open(f"{translated_srt}.part", "w", encoding="utf-8") as f:
+                        f.write(translated)
+                    os.replace(f"{translated_srt}.part", translated_srt)
+                else:
+                    with open(srt_file, "w", encoding="utf-8") as f:
+                        f.write(translated)
+            finally:
+                if srt_only:
+                    # keep the source subtitle, the translation is a sidecar
+                    os.replace(backup_srt, srt_file)
+                    if os.path.exists(f"{translated_srt}.part"):
+                        os.remove(f"{translated_srt}.part")
+        elif translation_needed:
             convert_to_docx(path=file)
             if browser is not None:
                 change_browser_window_size(
@@ -153,6 +192,10 @@ if __name__ == "__main__":
         if srt_only:
             print(f"  -> {translated_srt}")
             continue
-        strip_and_add_subtitle(path=file, language=to_lang)
+        strip_and_add_subtitle(
+            path=file,
+            language=to_lang,
+            track_name=name if translation_needed else None,
+        )
     if browser is not None:
         browser.quit()

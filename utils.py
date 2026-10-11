@@ -511,7 +511,8 @@ def convert_to_srt(path=None):
     os.remove(f"{path[:-3]}docx")
 
 
-def strip_and_add_subtitle(path=None, language="th"):
+def strip_and_add_subtitle(path=None, language="th", track_name=None):
+    track_name = track_name or f"{language}5555"
     strip_tag = "_stripped"
     stripped_file = f"{path[:-4]}{strip_tag}.mkv"
     srt_file = f"{path[:-3]}srt"
@@ -532,7 +533,7 @@ def strip_and_add_subtitle(path=None, language="th"):
             "--language",
             f"0:{language}",
             "--track-name",
-            f"0:{language}5555",
+            f"0:{track_name}",
             srt_file,
         ],
         encoding="utf-8",
