@@ -26,7 +26,7 @@ def lines_reply(lines, **kwargs):
 
 
 def is_lines(payload):
-    return "JSON array" in payload["messages"][0]["content"]
+    return '"lines"' in payload["messages"][0]["content"]
 
 
 class Fake:
@@ -146,7 +146,10 @@ def test_primary_accepts_line_aligned_reply():
     assert payload["usage"] == {"include": True}
     assert payload["temperature"] == 0
     assert payload["response_format"]["type"] == "json_schema"
-    assert json.loads(payload["messages"][1]["content"]) == THAI_LINES
+    assert json.loads(payload["messages"][1]["content"]) == {
+        "paragraph": "".join(THAI_LINES),
+        "lines": THAI_LINES,
+    }
     assert "exactly 4" in payload["messages"][0]["content"]
     assert translator.stats["lines_tried"] == translator.stats["lines_ok"] == 1
     assert translator.stats["cost"] == pytest.approx(0.001)
@@ -181,10 +184,44 @@ def test_primary_rejected_falls_back_to_spread(bad):
     assert translator.stats["lines_ok"] == 0 and translator.stats["lines_tried"] == 1
 
 
-def test_fallback_strips_echoed_markers_and_quotes():
+def test_primary_shifted_by_a_line_is_rejected():
+    # real drift: the right count, but the Bible line moved onto "อ่ะ"
+    texts = ["ว่าเห็นอ่านหนังสือตลอดเลยถือพระคัมภีร์", "อ่ะ"]
+    shifted = ["called for a chat.", "You always read books and hold the Bible."]
+
+    def responder(payload):
+        if is_lines(payload):
+            return lines_reply(shifted)
+        return reply("You always read books and hold the Bible. Ah.")
+
+    translator, fake = make(responder)
+    out, ok = translator.group(cues_of(texts))
+    assert ok and len(fake.payloads) == 2
+    assert translator.stats["lines_ok"] == 0
+    assert ot.line_mismatch("อ่ะ", shifted[1], "th", "en")
+    assert not ot.line_mismatch(texts[0], shifted[1], "th", "en")
+    assert not ot.line_mismatch("อ่ะ", "x" * 99, "en", "th")
+
+
+def test_single_cue_keeps_its_marker_and_strips_quotes():
     translator, _ = make(lambda p: reply('>> "Hello viewers, good evening"'))
     out, ok = translator.group(cues_of([">> สวัสดีครับคุณผู้ชม"]))
-    assert ok and out[0][2] == "Hello viewers, good evening"
+    assert ok and out[0][2] == ">> Hello viewers, good evening"
+    translator, _ = make(lambda p: reply("Uh"))
+    assert translator.group(cues_of([">> อื"]))[0][0][2] == ">> Uh"
+
+
+def test_fallback_keeps_only_the_first_cue_marker():
+    def responder(payload):
+        if is_lines(payload):
+            return lines_reply(["only one line"])
+        return reply(">> Hello viewers >> the weather is nice >> we go to the sea")
+
+    translator, _ = make(responder)
+    out, ok = translator.group(cues_of([">> " + THAI_LINES[0]] + THAI_LINES[1:]))
+    assert ok
+    assert out[0][2].startswith(">> Hello")
+    assert ">>" not in " ".join(text for _, _, text in out[1:])
 
 
 def test_schema_rejected_is_dropped_and_remembered():
@@ -251,7 +288,7 @@ def test_untranslated_group_retried_in_halves():
     def responder(payload):
         source = payload["messages"][1]["content"]
         if is_lines(payload):
-            lines = json.loads(source)
+            lines = json.loads(source)["lines"]
             if len(lines) == 4:
                 return lines_reply(lines)  # echoed Thai
             return lines_reply([f"half line {i}" for i in range(len(lines))])
@@ -266,7 +303,7 @@ def test_untranslated_group_retried_in_halves():
 
 def test_group_failing_after_halves_keeps_source():
     translator, _ = make(
-        lambda p: lines_reply(json.loads(p["messages"][1]["content"]))
+        lambda p: lines_reply(json.loads(p["messages"][1]["content"])["lines"])
         if is_lines(p)
         else reply(" ".join(["loop"] * 200))
     )
@@ -315,6 +352,52 @@ def test_persistent_error_keeps_source_and_counts(no_sleep):
     # 5 attempts per group, no half retry after a transport failure
     assert len(fake.payloads) == 10
     assert "HTTP 503" in stats["errors"][0]
+
+
+def test_breaker_stops_after_groups_fail_in_a_row(monkeypatch, no_sleep):
+    monkeypatch.setattr(ot, "WORKERS", 1)  # deterministic order
+
+    def responder(payload):
+        raise urllib.error.URLError("Connection refused")
+
+    translator, fake = make(responder)
+    cues = cues_of(["สวัสดีครับคุณผู้ชม"] * 20, step=3000)  # 20 groups
+    out = translator.run(cues)
+    assert out == cues and translator.stats["failed"] == 20
+    # BREAKER groups spend their retries, the rest send nothing
+    assert len(fake.payloads) == ot.BREAKER * 5
+    assert "giving up after 8 groups failed in a row" in translator.stats["aborted"]
+    assert len(translator.stats["errors"]) == 3
+
+
+def test_breaker_reset_by_any_answer(monkeypatch, no_sleep):
+    monkeypatch.setattr(ot, "WORKERS", 1)
+    texts = [f"กลุ่มที่ {i} ครับ" for i in range(15)]
+
+    def responder(payload):
+        if payload["messages"][1]["content"] == texts[7]:
+            return reply("Group seven")
+        raise ot.HTTPStatusError(400, "bad request")
+
+    translator, fake = make(responder)
+    translator.run(cues_of(texts, step=3000))
+    assert translator.stats["aborted"] is None
+    assert translator.stats["failed"] == 14 and translator.stats["translated"] == 1
+    assert len(fake.payloads) == 15
+
+
+@pytest.mark.parametrize("code", [400, 401, 503])
+def test_translate_srt_raises_when_nothing_translated(monkeypatch, capsys, code):
+    def post(self, payload):
+        self.stats["requests"] += 1
+        raise ot.HTTPStatusError(code, "no")
+
+    monkeypatch.setattr(ot.Translator, "_post", post)
+    monkeypatch.setenv("OPENROUTER_URL", "http://stub/v1")
+    srt = "1\n00:00:01,000 --> 00:00:02,000\nสวัสดีครับ\n"
+    with pytest.raises(ot.OpenRouterError, match="nothing was translated"):
+        ot.translate_srt(srt, "th", "en", key="k")
+    assert "1 failed" in capsys.readouterr().out
 
 
 def test_client_error_is_not_retried(no_sleep):
@@ -437,7 +520,9 @@ def test_translate_srt(monkeypatch, capsys):
         source = payload["messages"][1]["content"]
         seen.append(source)
         if is_lines(payload):
-            return lines_reply([f"line {i}" for i in range(len(json.loads(source)))])
+            return lines_reply(
+                [f"line {i}" for i in range(len(json.loads(source)["lines"]))]
+            )
         return reply("See you again")
 
     monkeypatch.setattr(ot.Translator, "_post", post)
@@ -448,7 +533,7 @@ def test_translate_srt(monkeypatch, capsys):
         "2\n00:00:02,000 --> 00:00:03,000\nline 1\n\n"
         "3\n00:00:09,000 --> 00:00:10,000\nSee you again\n"
     )
-    assert json.loads(seen[0]) == ["สวัสดีครับคุณผู้ชม", "วันนี้อากาศดีมาก"]
+    assert json.loads(seen[0])["lines"] == ["สวัสดีครับคุณผู้ชม", "วันนี้อากาศดีมาก"]
     printed = capsys.readouterr().out
     assert (
         "th-or-qwen: 2 requests, $0.0020, 2 groups (1/1 line-aligned), 0 failed"

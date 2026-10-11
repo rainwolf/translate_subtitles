@@ -29,7 +29,8 @@ THAI_SRT = (
 
 
 class Stub:
-    def __init__(self, fail=False):
+    def __init__(self, fail=None):
+        # fail: (status, body) answered to every request
         self.fail = fail
         self.payloads = []
         stub = self
@@ -46,7 +47,7 @@ class Stub:
                     (self.path, self.headers["Authorization"], payload)
                 )
                 if stub.fail:
-                    body, status = b'{"error": "down"}', 500
+                    status, body = stub.fail
                 else:
                     body, status = json.dumps(stub.answer(payload)).encode(), 200
                 self.send_response(status)
@@ -62,8 +63,8 @@ class Stub:
     @staticmethod
     def answer(payload):
         source = payload["messages"][1]["content"]
-        if "JSON array" in payload["messages"][0]["content"]:
-            count = len(json.loads(source))
+        if '"lines"' in payload["messages"][0]["content"]:
+            count = len(json.loads(source)["lines"])
             content = json.dumps({"lines": [f"english line {i}" for i in range(count)]})
         else:
             content = "english paragraph"
@@ -80,7 +81,7 @@ def stub():
     server.server.shutdown()
 
 
-def run_main(folder, stub, *args, to_lang="en", from_lang="th"):
+def run_main(folder, stub, *args, to_lang="en", from_lang="th", returncode=0):
     env = {
         **os.environ,
         "TRANSLATE_PATH": str(folder),
@@ -97,8 +98,8 @@ def run_main(folder, stub, *args, to_lang="en", from_lang="th"):
         text=True,
         timeout=120,
     )
-    assert result.returncode == 0, result.stderr
-    return result.stdout
+    assert result.returncode == returncode, result.stderr
+    return result.stdout + result.stderr
 
 
 @pytest.fixture
@@ -152,20 +153,36 @@ def test_model_argument_names_the_subtitle(mp4, stub):
     }
 
 
-def test_server_errors_keep_source_and_finish(mp4):
-    stub = Stub(fail=True)
+@pytest.mark.parametrize(
+    "fail, requests",
+    [
+        ((500, b'{"error": "down"}'), 10),  # retried
+        ((400, b'{"error": {"message": "qwen/typo is not a valid model ID"}}'), 2),
+        ((401, b'{"error": {"message": "No auth credentials found"}}'), 2),
+    ],
+)
+def test_nothing_translated_writes_nothing(mp4, fail, requests):
+    stub = Stub(fail=fail)
     try:
-        out = run_main(mp4, stub, "--openrouter")
+        out = run_main(mp4, stub, "--openrouter", "qwen/typo", returncode=1)
+        assert "2 failed" in out and f"HTTP {fail[0]}" in out
+        assert "not translated: nothing was translated" in out
+        assert len(stub.payloads) == requests
+        assert names(mp4) == ["clip.mp4", "clip.srt"]
+        assert (mp4 / "clip.srt").read_bytes() == THAI_SRT.encode()
+        # the corrected rerun is not blocked by a source-only sidecar
+        stub.fail = None
+        run_main(mp4, stub, "--openrouter")
+        assert names(mp4) == ["clip.mp4", "clip.srt", "clip.th-or-qwen.srt"]
     finally:
         stub.server.shutdown()
-    assert names(mp4) == ["clip.mp4", "clip.srt", "clip.th-or-qwen.srt"]
-    assert (mp4 / "clip.srt").read_bytes() == THAI_SRT.encode()
-    cues = parse_srt((mp4 / "clip.th-or-qwen.srt").read_text(encoding="utf-8"))
-    assert [body for _, _, body in cues] == [
-        [line] for line in THAI_SRT.split("\n") if line and line[0] > "฀"
-    ]
-    assert "2 failed" in out and "HTTP 500" in out
-    assert len(stub.payloads) == 10
+
+
+@pytest.mark.parametrize("arg", ["--openrouter=", "--openrouter= "])
+def test_empty_model_is_rejected(mp4, stub, arg):
+    out = run_main(mp4, stub, arg, returncode=2)
+    assert "--openrouter MODEL must not be empty" in out
+    assert names(mp4) == ["clip.mp4", "clip.srt"] and not stub.payloads
 
 
 def test_rerun_skips(mp4, stub):
@@ -187,11 +204,7 @@ def test_stale_part_and_orig_recovered(mp4, stub):
     assert (mp4 / "clip.srt").read_bytes() == THAI_SRT.encode()
 
 
-@pytest.mark.skipif(
-    not (shutil.which("ffmpeg") and shutil.which("mkvmerge")),
-    reason="needs ffmpeg and mkvtoolnix",
-)
-def test_mkv_track_named(tmp_path, stub):
+def make_mkv(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
     (source / "th.srt").write_text(THAI_SRT, encoding="utf-8")
@@ -206,6 +219,30 @@ def test_mkv_track_named(tmp_path, stub):
         ],
         check=True,
     )  # fmt: skip
+    return folder
+
+
+needs_mkv = pytest.mark.skipif(
+    not (shutil.which("ffmpeg") and shutil.which("mkvmerge")),
+    reason="needs ffmpeg and mkvtoolnix",
+)
+
+
+@needs_mkv
+def test_mkv_failure_leaves_only_the_video(tmp_path):
+    folder = make_mkv(tmp_path)
+    stub = Stub(fail=(401, b'{"error": {"message": "No auth credentials found"}}'))
+    try:
+        run_main(folder, stub, "--openrouter", returncode=1)
+    finally:
+        stub.server.shutdown()
+    # no extracted video.srt left to be mistaken for a sidecar next run
+    assert names(folder) == ["video.mkv"]
+
+
+@needs_mkv
+def test_mkv_track_named(tmp_path, stub):
+    folder = make_mkv(tmp_path)
     run_main(folder, stub, "--openrouter")
     assert names(folder) == ["video.mkv", "video_en.mkv"]
     info = json.loads(

@@ -39,7 +39,9 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     name, key = None, None
-    if args.openrouter:
+    if args.openrouter is not None:
+        if not args.openrouter.strip():
+            parser.error("--openrouter MODEL must not be empty")
         name = openrouter_translate.subtitle_name(args.openrouter)
         try:
             key = openrouter_translate.api_key()
@@ -47,6 +49,7 @@ if __name__ == "__main__":
             parser.exit(1, f"{e}\n")
     path = os.environ["TRANSLATE_PATH"]
     browser, width, height = None, None, None
+    failures = 0
     to_lang = os.environ.get("TRANSLATE_TO_LANG", "th")
     from_lang = os.environ.get("TRANSLATE_FROM_LANG", "en")
     # mkv can be remuxed; mp4 is sidecar-srt only
@@ -152,6 +155,14 @@ if __name__ == "__main__":
                 else:
                     with open(srt_file, "w", encoding="utf-8") as f:
                         f.write(translated)
+            except openrouter_translate.OpenRouterError as e:
+                # nothing is written, so the next run tries this file again
+                print(f"  not translated: {e}")
+                failures += 1
+                if not srt_only:
+                    # extracted from the mkv; left behind it would look like a sidecar
+                    os.remove(srt_file)
+                continue
             finally:
                 if srt_only:
                     # keep the source subtitle, the translation is a sidecar
@@ -199,3 +210,5 @@ if __name__ == "__main__":
         )
     if browser is not None:
         browser.quit()
+    if failures:
+        parser.exit(1, f"{failures} file(s) not translated\n")

@@ -27,6 +27,8 @@ KEYCHAIN_SERVICE = "openrouter-transforms"
 LANGUAGES = {"en": "English", "th": "Thai"}
 RETRY_DELAYS = (2, 5, 15, 30)
 WORKERS = 8
+# this many groups failing in a row on the transport stops the run
+BREAKER = WORKERS
 TIMEOUT = 120
 
 MAX_GAP_MS = 1000
@@ -47,11 +49,15 @@ TRANSIENT = (
 
 SYSTEM = "You translate {source} video subtitles into natural, accurate {target}. "
 LINES_PROMPT = (
-    "The user sends a JSON array of {count} consecutive subtitle lines. Reply with "
-    'only a JSON object {{"lines": [...]}} holding exactly {count} {target} strings, '
-    "one translation per input line in the same order. You may move words between "
-    "neighbouring lines so each one reads naturally, but never merge, split, drop "
-    "or add lines. Keep a leading >> (speaker change) on the lines that have one."
+    'The user sends a JSON object: "paragraph" is a stretch of continuous speech and '
+    '"lines" is the same text cut into {count} subtitle lines at arbitrary points, '
+    "often mid-phrase or mid-word. Translate the paragraph as a whole, then reply "
+    'with only a JSON object {{"lines": [...]}} holding exactly {count} {target} '
+    "strings, line i carrying the meaning of source line i, in the same order. You "
+    "may move words between neighbouring lines so each one reads naturally, but "
+    "never merge, split, drop or add lines. A >> marks a speaker change; keep it on "
+    "the lines that start with one. It can also appear in the middle of a line, and "
+    "then the words after it stay in that same line."
 )
 TEXT_PROMPT = (
     "Translate the user's text. Output only the {target} translation, nothing else."
@@ -199,6 +205,14 @@ def untranslated(source, output, from_lang, to_lang, finish_reason=None):
     return _words(output, to_lang) > _word_limit(source, from_lang)
 
 
+def line_mismatch(source, line, from_lang, to_lang):
+    """A Thai line whose translation is far too long or short belongs elsewhere."""
+    if from_lang != "th" or to_lang == "th":
+        return False
+    chars = len(re.sub(r"\s", "", source))
+    return len(line) > 6 * chars + 20 or 4 * len(line) < chars - 10
+
+
 def spread(text, weights, to_lang):
     """Split text over len(weights) parts proportionally, on word boundaries."""
     if to_lang == "th":
@@ -257,6 +271,9 @@ class Translator:
         self.lock = threading.Lock()
         self.disable_reasoning = True
         self.use_schema = True
+        # groups failing on the transport in a row, reset by any answered request
+        self.failures_in_a_row = 0
+        self.aborted = None
         self.stats = {
             "requests": 0,
             "cost": 0.0,
@@ -264,7 +281,9 @@ class Translator:
             "lines_tried": 0,
             "lines_ok": 0,
             "failed": 0,
+            "translated": 0,
             "errors": [],
+            "aborted": None,
         }
 
     def _post(self, payload):
@@ -294,8 +313,13 @@ class Translator:
 
     def _post_with_retry(self, payload):
         for attempt in range(len(RETRY_DELAYS) + 1):
+            if self.aborted is not None:
+                raise self.aborted
             try:
-                return self._post(payload)
+                data = self._post(payload)
+                with self.lock:
+                    self.failures_in_a_row = 0
+                return data
             except HTTPStatusError as e:
                 if (e.code != 429 and e.code < 500) or attempt == len(RETRY_DELAYS):
                     raise
@@ -346,12 +370,19 @@ class Translator:
         )
 
     def _lines(self, texts):
-        user = json.dumps(texts, ensure_ascii=False)
+        joined_source = self.source_sep.join(texts)
+        # the whole paragraph next to the lines keeps meaning that crosses cuts
+        user = json.dumps(
+            {"paragraph": joined_source, "lines": texts}, ensure_ascii=False
+        )
         instruction = LINES_PROMPT.format(
             count=len(texts), target=language_name(self.to_lang)
         )
         content, finish = self.complete(
-            instruction, user, _max_tokens(user), schema=True
+            instruction,
+            user,
+            _max_tokens(json.dumps(texts, ensure_ascii=False)),
+            schema=True,
         )
         lines = parse_lines(content)
         if finish == "length" or lines is None or len(lines) != len(texts):
@@ -362,7 +393,12 @@ class Translator:
         ]
         if not all(lines):
             return None
-        joined_source = self.source_sep.join(texts)
+        # right count but shifted by a line: some line is far off its source
+        if any(
+            line_mismatch(text, line, self.from_lang, self.to_lang)
+            for line, text in zip(lines, texts)
+        ):
+            return None
         if untranslated(
             joined_source, self.target_sep.join(lines), self.from_lang, self.to_lang
         ):
@@ -373,7 +409,8 @@ class Translator:
         source = self.source_sep.join(texts)
         instruction = TEXT_PROMPT.format(target=language_name(self.to_lang))
         content, finish = self.complete(instruction, source, _max_tokens(source))
-        text = clean_output(_strip_think(content), source, keep_markers=False)
+        # a single cue's markers line up with it; a paragraph's would not
+        text = clean_output(_strip_think(content), source, keep_markers=len(texts) == 1)
         if untranslated(source, text, self.from_lang, self.to_lang, finish):
             return None
         return text
@@ -392,12 +429,27 @@ class Translator:
                     (start, end, line) for (start, end, _), line in zip(cues, lines)
                 ]
         text = self._text(texts)
-        return None if text is None else spread_cues(cues, text, self.to_lang)
+        if text is None:
+            return None
+        out = spread_cues(cues, text, self.to_lang)
+        # the group's first cue always starts the paragraph, so its >> is right
+        if texts[0].lstrip().startswith(">>") and not out[0][2].startswith(">>"):
+            out[0] = (out[0][0], out[0][1], f">> {out[0][2]}")
+        return out
 
     def _error(self, e):
         with self.lock:
-            if len(self.stats["errors"]) < 3:
+            if len(self.stats["errors"]) < 3 and e is not self.aborted:
                 self.stats["errors"].append(f"{type(e).__name__}: {e}"[:200])
+            if e is self.aborted:
+                return
+            self.failures_in_a_row += 1
+            if self.failures_in_a_row >= BREAKER and self.aborted is None:
+                # down, bad key or bad model: every other group would fail too
+                self.aborted = OpenRouterError(
+                    f"giving up after {BREAKER} groups failed in a row: "
+                    f"{type(e).__name__}: {e}"[:300]
+                )
 
     def group(self, cues):
         """(translated cues, ok); a part that fails keeps its source cues."""
@@ -408,6 +460,8 @@ class Translator:
             self._error(e)
             return cues, False
         if out is not None:
+            with self.lock:
+                self.stats["translated"] += 1
             return out, True
         if len(cues) == 1:
             return cues, False
@@ -424,6 +478,9 @@ class Translator:
                 ok = False
             else:
                 result += part
+        if result != cues:
+            with self.lock:
+                self.stats["translated"] += 1
         return result, ok
 
     def run(self, cues):
@@ -434,6 +491,7 @@ class Translator:
             for translated, ok in pool.map(self.group, groups):
                 out += translated
                 self.stats["failed"] += not ok
+        self.stats["aborted"] = None if self.aborted is None else str(self.aborted)
         return out
 
 
@@ -475,6 +533,11 @@ def translate_srt(srt_text, from_lang, to_lang, model=DEFAULT_MODEL, key=None):
     cues = [cue for cue in cues if cue[2]]
     translated, stats = translate_cues(cues, from_lang, to_lang, model, key)
     report(subtitle_name(model), stats)
+    # publishing the source as a translation would also block the rerun
+    if stats["aborted"]:
+        raise OpenRouterError(stats["aborted"])
+    if stats["groups"] and not stats["translated"]:
+        raise OpenRouterError("nothing was translated")
     return emit_srt(
         [
             (_timestamp(start), _timestamp(end), [text])
