@@ -1,3 +1,4 @@
+import io
 import json
 import subprocess
 import urllib.error
@@ -538,4 +539,41 @@ def test_translate_srt(monkeypatch, capsys):
     assert (
         "th-or-qwen: 2 requests, $0.0020, 2 groups (1/1 line-aligned), 0 failed"
         in printed
+    )
+
+
+# progress
+
+
+class FakeTty(io.StringIO):
+    def isatty(self):
+        return True
+
+
+def run_groups(monkeypatch, stderr):
+    monkeypatch.setattr(ot.sys, "stderr", stderr)
+    translator, _ = make(lambda payload: lines_reply(["a"] * 2))
+    cues = [(i * 5000, i * 5000 + 900, THAI_LINES[i % 4]) for i in range(3)]
+    return translator.run(cues)
+
+
+def test_progress_on_tty_ends_complete_with_newline(monkeypatch):
+    err = FakeTty()
+    run_groups(monkeypatch, err)
+    text = err.getvalue()
+    assert "1/3 groups" in text
+    assert "3/3 groups (100%)" in text
+    assert text.endswith("\n")
+
+
+def test_no_progress_when_stderr_is_not_a_tty(monkeypatch):
+    err = io.StringIO()
+    run_groups(monkeypatch, err)
+    assert err.getvalue() == ""
+
+
+def test_translating_line_on_stdout(monkeypatch, capsys):
+    run_groups(monkeypatch, io.StringIO())
+    assert (
+        f"translating 3 groups with {ot.DEFAULT_MODEL} ..." in capsys.readouterr().out
     )

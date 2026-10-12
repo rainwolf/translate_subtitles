@@ -13,6 +13,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -259,6 +260,11 @@ def _max_tokens(source):
     return min(4096, 4 * len(source) + 128)
 
 
+def _clock(seconds):
+    minutes, seconds = divmod(int(seconds), 60)
+    return f"{minutes}m{seconds:02d}s" if minutes else f"{seconds}s"
+
+
 class Translator:
     def __init__(self, model, from_lang, to_lang, key, base_url):
         self.model, self.from_lang, self.to_lang = model, from_lang, to_lang
@@ -274,6 +280,9 @@ class Translator:
         # groups failing on the transport in a row, reset by any answered request
         self.failures_in_a_row = 0
         self.aborted = None
+        self.done = 0
+        self.started = 0.0
+        self.drawn = 0
         self.stats = {
             "requests": 0,
             "cost": 0.0,
@@ -483,14 +492,43 @@ class Translator:
                 self.stats["translated"] += 1
         return result, ok
 
+    def _progress(self):
+        with self.lock:
+            self.done += 1
+            if not sys.stderr.isatty():
+                return
+            total, done = self.stats["groups"], self.done
+            elapsed = time.monotonic() - self.started
+            line = (
+                f"  {done}/{total} groups ({done * 100 // total}%), "
+                f"${self.stats['cost']:.4f}, {_clock(elapsed)} elapsed"
+            )
+            line += f", ~{_clock(elapsed / done * (total - done))} left"
+            sys.stderr.write("\r" + line.ljust(self.drawn))
+            sys.stderr.flush()
+            self.drawn = max(self.drawn, len(line))
+
+    def tracked(self, cues):
+        try:
+            return self.group(cues)
+        finally:
+            self._progress()
+
     def run(self, cues):
         groups = [[cues[i] for i in indexes] for indexes in group_cues(cues)]
         self.stats["groups"] = len(groups)
+        print(f"  translating {len(groups)} groups with {self.model} ...", flush=True)
+        self.started = time.monotonic()
         out = []
-        with ThreadPoolExecutor(WORKERS) as pool:
-            for translated, ok in pool.map(self.group, groups):
-                out += translated
-                self.stats["failed"] += not ok
+        try:
+            with ThreadPoolExecutor(WORKERS) as pool:
+                for translated, ok in pool.map(self.tracked, groups):
+                    out += translated
+                    self.stats["failed"] += not ok
+        finally:
+            if self.drawn:
+                sys.stderr.write("\n")
+                sys.stderr.flush()
         self.stats["aborted"] = None if self.aborted is None else str(self.aborted)
         return out
 
